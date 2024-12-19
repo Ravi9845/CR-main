@@ -1,0 +1,761 @@
+pipeline {
+  agent {
+		label 'ams'
+	}
+  environment{
+    // AWS_DEPLOYMENT_REGION = "$env.AWS_DEPLOYMENT_REGION"
+    AWS_DEPLOYMENT_REGION = "us-east-1"
+    // STAGE = "$env.STAGE"
+    STAGE = "RC1"
+    AWS_CREDENTIAL = "aws_account_id_${STAGE.toLowerCase()}_${AWS_DEPLOYMENT_REGION.replace('-', '_')}"
+	AWS_ACCOUNT_ID = ''
+    AWS_IAM_ROLE_NAME = 'customer-environment-shutdown-startup'
+    CICD_REGION = 'us-east-1'
+    CICD_REGION_ROLE = ''
+	CICD_CREDENTIAL = 'aws_account_id_cicd_us_east_1'
+	CICD_ACCOUNT_ID = '' // Instance="$env.EC2_Instance"
+    EC2_Instance="$env.EC2_Instance"
+    def InstanceId=" "
+    def instance_status=" "
+    def op = "$env.EC2_operations"
+    def rds_flag= "$env.rdsFlag"
+    def rds_cluster ="$env.RDS_cluster"
+    def op_rds="$env.RDS_operations"
+    def ecs_cluster ="$env.ECS_cluster"
+    def op_ecs="$env.ECS_operations"
+    def eks_cluster ="$env.EKS_cluster"
+    def eks_nodegroup ="$env.EKS_NodeGroup"
+    def op_eks="$env.EKS_operations"
+    def asg_name1 ="$env.ASG_name"
+    def op_asg ="$env.asg_operation"
+    def dmuserchoice1 = "$env.dmuserchoicemode"
+    def dmuserchoice = "$env.DMuserchoice"
+  }
+  stages {
+    stage('Setup Environment') {
+			steps {
+				script {
+					switch (AWS_DEPLOYMENT_REGION) {
+						case "us-east-1":
+							CICD_REGION_ROLE = 'jenkins-pipeline-assume-role'
+							break
+						case "eu-west-2":
+							CICD_REGION_ROLE = 'jenkins-pipeline-assume-role-euw2'
+							break
+						case "eu-central-1":
+                            CICD_REGION_ROLE = 'jenkins-pipeline-assume-role-euc1'
+							break
+					}
+					withCredentials([string(credentialsId: CICD_CREDENTIAL, variable: 'CICD_ACCOUNT')]) {
+						CICD_ACCOUNT_ID = CICD_ACCOUNT
+					}
+
+					withCredentials([string(credentialsId: AWS_CREDENTIAL, variable: 'ACCOUNT_ID')]) {
+						AWS_ACCOUNT_ID = ACCOUNT_ID
+					}
+				}
+			}
+    }
+    stage('start EC2 instance'){
+      steps{
+        script{
+          withAWS(region: CICD_REGION, roleAccount: CICD_ACCOUNT_ID, role: CICD_REGION_ROLE, duration: 3600) {
+            withAWS(region: AWS_DEPLOYMENT_REGION, roleAccount: AWS_ACCOUNT_ID, role: AWS_IAM_ROLE_NAME, duration: 3600) {
+                try{
+                  // to store the instance id
+                   InstanceId = sh(script:'aws ec2 describe-instances --filters Name=tag:Name,Values=$EC2_Instance --query "Reservations[*].Instances[*].InstanceId" --output text', returnStdout:true).trim()
+                  def lines = InstanceId.readLines()
+                    InstanceId_asg  =lines[0].trim()
+                  echo "$EC2_Instance ID is $InstanceId"
+
+                  // get instance status
+                   instance_status = sh(script:'aws ec2 describe-instances --filters "Name=tag:Name,Values=$EC2_Instance" "Name=instance-state-name,Values=running,stopped" | jq \'.Reservations[0].Instances[0].State.Name\' | tr -d \'"\'' , returnStdout:true).trim()    
+                     
+                  switch ("$op"){
+
+                    case "Start":
+                          if ("$instance_status"=="stopped"){
+                            start_instances = sh(script: "aws ec2 start-instances --instance-ids $InstanceId", returnStdout:true).trim()
+                            echo "Instance $InstanceId is now started"
+                          }
+                          else if ("$instance_status"=="running"){
+                              echo "Instance $InstanceId is already running"
+                          }
+                          else{
+                            echo "ERROR"
+                          }
+                    break;
+
+                    case "Stop":
+                          if ("$instance_status"=="stopped"){
+                            echo "Instance $InstanceId is already in stop state"
+                          }
+                          else if ("$instance_status"=="running"){
+                            stop_instances = sh(script: "aws ec2 stop-instances --instance-ids $InstanceId", returnStdout:true).trim()
+                            echo "Stopped - $InstanceId"
+                          }
+                    break;
+
+                    case "Status":
+                          echo "EC2 status - $instance_status" 
+                    break;
+                  }
+                }
+                catch(err){
+                  echo "ERROR CAUGHT: $err"
+                }           
+            }
+          }
+        }
+      }
+    }
+        stage('Scale Up ASG') {
+            steps {
+                script {
+                    withAWS(region: CICD_REGION, roleAccount: CICD_ACCOUNT_ID, role: CICD_REGION_ROLE, duration: 3600) {
+                        withAWS(region: AWS_DEPLOYMENT_REGION, roleAccount: AWS_ACCOUNT_ID, role: AWS_IAM_ROLE_NAME, duration: 3600) {
+                                                try {
+                                                    // Mapping for user-friendly names to actual ASG names
+                                                    def asgNameMap = [
+                                                        "fileservice-rc1-novus-util": "stack-crmjrlk0dcbvtnvzp-FileserviceUtilASG-1DW3MV41UIJ0O",
+                                                        "filerserver-asg": "filerserver-asg",
+                                                        "dm-rule-server-rc1-utility-host-DMRuleServerUtilASG-1P370Q8E8TN24": "dm-rule-server-rc1-utility-host-DMRuleServerUtilASG-1P370Q8E8TN24",
+                                                        "dm-ec2-etl": "dm-ec2-etl",
+                                                        "dm-ec2-openoffice": "dm-ec2-openoffice",
+                                                        "dm2-DebtManager-activemq-asg": "stack-zflgbkzclpewvcapp-ASG-de71l2E4Wut6",
+                                                        "dm-ec2-pgadmin": "dm-ec2-pgadmin",
+                                                        "dm-DebtManager-acivemq-asg": "stack-r3yujqsnuergidy3i-ASG-12OZ53CZMQYA1"
+                                                    ]
+                                // Mapping for desired and minimum capacities
+                                def capacityMap = [
+                                    "stack-crmjrlk0dcbvtnvzp-FileserviceUtilASG-1DW3MV41UIJ0O": [desired: 1, min: 1, max: 2],
+                                    "dm-ec2-pgadmin": [desired: 1, min: 1, max: 2],
+                                    "dm-ec2-etl": [desired: 2, min: 2, max: 3],
+                                    "dm-rule-server-rc1-utility-host-DMRuleServerUtilASG-1P370Q8E8TN24": [desired: 1, min: 1, max: 2],
+                                    "dm-ec2-openoffice": [desired: 1, min: 1, max: 2],
+                                    "stack-zflgbkzclpewvcapp-ASG-de71l2E4Wut6": [desired: 1, min: 1, max: 1],
+                                    "stack-r3yujqsnuergidy3i-ASG-12OZ53CZMQYA1": [desired: 1, min: 1, max: 2],
+                                    "filerserver-asg": [desired: 1, min: 1, max: 2]
+                                ]
+                                                        
+
+                                    if (!asgNameMap.containsKey(asg_name1)) {
+                                        error "Invalid ASG name '$asg_name1' provided. Please check the mapping."
+                                    }
+                                    def actualAsgName = asgNameMap[asg_name1]
+                                    
+                                    // Check if the actual ASG name exists in the capacity map
+                                    if (!capacityMap.containsKey(actualAsgName)) {
+                                        error "Capacity mapping for ASG '$actualAsgName' not found."
+                                    }
+            
+                                    // Retrieve desired, minimum, and maximum capacities
+                                    def desired_cap = capacityMap[actualAsgName].desired
+                                    def min_cap = capacityMap[actualAsgName].min
+                                    def max_cap = capacityMap[actualAsgName].max
+                                
+                                // Check if the ASG name exists in the capacityMap
+                                
+                                echo "Auto Scaling Group: $actualAsgName, Desired Capacity: $desired_cap, Minimum Capacity: $min_cap, maximun Capacity: $max_cap"
+
+                                // Check for suspended processes in the Auto Scaling Group
+                                def suspended_processes = sh(script: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $asg_name1 --query 'AutoScalingGroups[0].SuspendedProcesses[*].ProcessName' --output text", returnStdout: true).trim()
+
+                                if (!suspended_processes.isEmpty()) {
+                                    echo "Suspended processes found for ASG $actualAsgName: $suspended_processes"
+                                    // Resume suspended processes
+                                    sh(script: "aws autoscaling resume-processes --auto-scaling-group-name $actualAsgName", returnStdout: true).trim()
+                                    echo "Resumed suspended processes for ASG $actualAsgName"
+                                } else {
+                                    echo "No suspended processes found for ASG $actualAsgName"
+                                }
+
+                                // Scale up or down the Auto Scaling Group based on the operation
+                                switch (op_asg) {
+                                    case "Start":
+                                        echo "Updating desired capacity for ASG $actualAsgName to $desired_cap $min_cap $max_cap"
+                                        sh(script: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name $actualAsgName --desired-capacity $desired_cap --min-size $min_cap --max-size $max_cap", returnStdout: true).trim()
+                                        echo "ASG $actualAsgName scaled to desired capacity of $desired_cap"
+
+                                        // Wait for instances to launch and check their state
+                                        def instance_state = sh(script: "aws autoscaling describe-auto-scaling-instances --query 'AutoScalingInstances[?AutoScalingGroupName==\"$asg_name1\"].LifecycleState' --output text", returnStdout: true).trim()
+                                        echo "Instance states for ASG $actualAsgName: $instance_state"
+                                        break;
+
+                                    case "Stop":
+                                        echo "Stopping all instances in ASG $actualAsgName by setting desired capacity to 0"
+                                        sh(script: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name $actualAsgName --desired-capacity 0 --min-size 0  --max-size 0", returnStdout: true).trim()
+                                        echo "ASG $actualAsgName scaled down to desired capacity of 0"
+                                        break;
+
+                                    default:
+                                        echo "No valid operation specified"
+                                        break;
+                                }
+                            } catch (err) {
+                                echo "ERROR CAUGHT: $err"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+      stage('starting RDS cluster') {
+        steps{
+        script{
+          withAWS(region: CICD_REGION, roleAccount: CICD_ACCOUNT_ID, role: CICD_REGION_ROLE, duration: 3600) {
+            withAWS(region: AWS_DEPLOYMENT_REGION, roleAccount: AWS_ACCOUNT_ID, role: AWS_IAM_ROLE_NAME, duration: 3600) {
+                            if (rds_cluster != "none") {
+                                try {
+                                    // Check the current status of the RDS cluster
+                                    def db_status = sh(
+                                        script: "aws rds describe-db-clusters --db-cluster-identifier $rds_cluster --query DBClusters[0].Status | xargs",
+                                        returnStdout: true
+                                    ).trim()
+
+                                    // Determine action based on desired operation and current status
+                                    switch (op_rds) {
+                                        case "start":
+                                            if (db_status == "available") {
+                                                echo "RDS cluster $rds_cluster is already available. No action needed."
+                                                rds_operation_success = true  // Set flag to true since no action was needed
+                                            } else {
+                                                echo "Starting RDS cluster as ECS service is set to start."
+                                                def db_start = sh(
+                                                    script: "aws rds start-db-cluster --db-cluster-identifier $rds_cluster | xargs",
+                                                    returnStdout: true
+                                                ).trim()
+                                                echo "RDS cluster $rds_cluster is starting..."
+
+                                                // Wait for the RDS cluster to become available
+                                                while (db_status != "available") {
+                                                    echo "RDS Cluster not available. Waiting 60 seconds..."
+                                                    sleep(60)
+                                                    db_status = sh(
+                                                        script: "aws rds describe-db-clusters --db-cluster-identifier $rds_cluster --query DBClusters[0].Status | xargs",
+                                                        returnStdout: true
+                                                    ).trim()
+                                                }
+                                                echo "RDS cluster $rds_cluster is now available."
+                                                rds_operation_success = true  // Set flag to true when RDS is started successfully
+                                            }
+                                            break
+
+                                        case "stop":
+                                            if (db_status == "stopped") {
+                                                echo "RDS cluster $rds_cluster is already stopped. No action needed."
+                                                rds_operation_success = true  // Set flag to true since no action was needed
+                                            } else {
+                                                echo "Stopping RDS cluster as ECS service is set to stop."
+                                                def db_stop = sh(
+                                                    script: "aws rds stop-db-cluster --db-cluster-identifier $rds_cluster | xargs",
+                                                    returnStdout: true
+                                                ).trim()
+                                                echo "RDS cluster $rds_cluster is stopping..."
+                                                rds_operation_success = true  // Set flag to true when RDS is stopped successfully
+                                            }
+                                            break
+
+                                        default:
+                                            echo "No valid operation specified for RDS cluster."
+                                            rds_operation_success = false
+                                    }
+                                } catch (err) {
+                                    echo "Failed to manage RDS cluster: $err"
+                                    error("Exiting pipeline due to RDS cluster management failure.")
+                                }
+                            } else {
+                                echo "No RDS cluster specified."
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+stage('Scale ECS Services Based on Cluster other env') {   
+        steps {
+            script {
+                withAWS(region: CICD_REGION, roleAccount: CICD_ACCOUNT_ID, role: CICD_REGION_ROLE, duration: 3600) {
+                    withAWS(region: AWS_DEPLOYMENT_REGION, roleAccount: AWS_ACCOUNT_ID, role: AWS_IAM_ROLE_NAME, duration: 3600) {
+                        if (op_ecs == 'none') {
+                            echo "operationType is 'none', skipping the scaling step."
+                            return
+                        }
+                    // select ecs cluster based on that it will select rds cluster
+                    if (ecs_cluster == "dm-ecs-cluster" || ecs_cluster == "crfs-rc1-novus-ecs" || ecs_cluster == "cos-ecs-cluster" || ecs_cluster == "dm-bpocloud-cluster") {
+                            rds_cluster1 = "dm-rds-cluster-v2"
+                    }  else if (ecs_cluster == "dm2-ecs-cluster") {
+                            rds_cluster1 = "dm2-rds-cluster"
+                    } else if (ecs_cluster == "dm-ecs-cluster") {
+                        desired_counts_asg = [
+                            "dm-ec2-ecs": [desired: 5, min: 4, max: 6]
+                        ]
+                    } else {
+                        rds_cluster1 = "RDS_CLUSTER1_NOT_FOUND"
+                    }
+                if (rds_cluster1 == "RDS_CLUSTER1_NOT_FOUND") {
+                       echo "No rds associated with ecs cluster $rds_cluster1. proceeding with desired capacity update on ecs cluster"
+                } else {
+                    def db_status = sh(
+                        script: "aws rds describe-db-clusters --db-cluster-identifier $rds_cluster1 --query DBClusters[0].Status | xargs",
+                        returnStdout: true
+                    ).trim()
+                                    switch (op_ecs) {
+                                        case "start":
+                                            if (db_status == "available") {
+                                                echo "RDS cluster $rds_cluster1 is already available. No action needed."
+                                            } else {
+                                                echo "Starting RDS cluster as ECS service is set to start."
+                                                def db_start = sh(
+                                                    script: "aws rds start-db-cluster --db-cluster-identifier $rds_cluster1 | xargs",
+                                                    returnStdout: true
+                                                ).trim()
+                                                echo "RDS cluster $rds_cluster1 is starting..."
+
+                                                // Wait for the RDS cluster to become available
+                                                while (db_status != "available") {
+                                                    echo "RDS Cluster not available. Waiting 60 seconds..."
+                                                    sleep(60)
+                                                    db_status = sh(
+                                                        script: "aws rds describe-db-clusters --db-cluster-identifier $rds_cluster1 --query DBClusters[0].Status | xargs",
+                                                        returnStdout: true
+                                                    ).trim()
+                                                }
+                                                echo "RDS cluster $rds_cluster1 is now available."
+                                        
+                                            }
+                                            break
+
+                                        case "stop":
+                                        echo "No action needed associated with the selected ECS cluster: $rds_cluster1. Skipping rds update."
+                                        break
+                                    }
+                }
+                    def desired_counts_asg = [:]
+                    if (ecs_cluster == "dm2-ecs-cluster") {
+                        desired_counts_asg = [
+                            "dm2-ec2-ecs": [desired: 5, min: 4, max: 6]
+                        ]
+                    } else if (ecs_cluster == "crfs-rc1-novus-ecs") {
+                        desired_counts_asg = [
+                            "crfs-rc1-novus-ecs-asg": [desired: 2, min: 1, max: 3]
+                        ]
+                    }
+
+                    if (desired_counts_asg) {
+                        desired_counts_asg.each { asg, count ->
+                            def desired_cap_asg = count.desired
+                            def min_cap_asg = count.min
+                            def max_cap_asg = count.max
+                            // Retrieve suspended processes for the ASG
+                            def suspended_processes = sh(
+                                script: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $asg --query 'AutoScalingGroups[0].SuspendedProcesses[*].ProcessName' --output text",
+                                returnStdout: true
+                            ).trim()
+
+                            if (!suspended_processes.isEmpty()) {
+                                echo "Suspended processes found for ASG $asg: $suspended_processes"
+                                // Resume suspended processes
+                                sh(script: "aws autoscaling resume-processes --auto-scaling-group-name $asg", returnStdout: true)
+                                echo "Resumed suspended processes for ASG $asg"
+                            } else {
+                                echo "No suspended processes found for ASG $asg"
+                            }
+                            switch (op_ecs) {
+                                case "start":
+                                    echo "Updating ASG $asg: Desired Capacity: $desired_cap_asg, Minimum Capacity: $min_cap_asg, Maximum Capacity: $max_cap_asg"
+                                    // Update the Auto Scaling Group using AWS CLI
+                                    sh(script: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name $asg --desired-capacity $desired_cap_asg --min-size $min_cap_asg --max-size $max_cap_asg", returnStdout: true)
+
+                                    // Wait for EC2 instances to be in running state
+                                    def ec2_instances_running = false
+                                    while (!ec2_instances_running) {
+                                        // Get the instance IDs in the ASG
+                                        def instance_ids = sh (
+                                            script: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $asg --query 'AutoScalingGroups[0].Instances[*].InstanceId' --output text",
+                                            returnStdout: true
+                                        ).trim()
+
+                                        // Check if all instances are in running state
+                                        def instance_states = sh (
+                                            script: "aws ec2 describe-instances --instance-ids $instance_ids --query 'Reservations[*].Instances[*].State.Name' --output text",
+                                            returnStdout: true
+                                        ).trim()
+
+                                        if (instance_states.split().every { it == "running" }) {
+                                            ec2_instances_running = true
+                                            echo "All EC2 instances in ASG $asg are now running."
+                                        } else {
+                                            echo "Waiting for EC2 instances in ASG $asg to be in running state. Retrying in 60 seconds..."
+                                            sleep(60)
+                                        }
+                                    }
+                                    break
+                                case "stop":
+                                    sh(script: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name $asg --desired-capacity 0 --min-size 0  --max-size 0", returnStdout: true).trim()
+                                    break
+                            }
+                        }
+                    } else {
+                        echo "No ASG associated with the selected ECS cluster: $ecs_cluster. Skipping ASG update."
+                    }   
+                        // Define the desired counts for services based on cluster
+                        def desired_counts = [:]
+                        if (ecs_cluster == "crfs-ui-cluster") {
+                            desired_counts = [
+                                "crfs-ui": "2"
+                            ]
+                        } else if (ecs_cluster == "cos-ecs-cluster") {
+                            desired_counts = [
+                                "cos-app-service": "1",
+                                "cos-flyway": "1"
+                            ]
+                        } else if (ecs_cluster == "crfs-rc1-novus-ecs") {
+                            desired_counts = [
+                                "crfs-configuration": "1",
+                                "crfs-file-processing": "1",
+                                "crfs-security": "1"
+                            ]
+                        } else if (ecs_cluster == "dm2-ecs-cluster") {
+                            desired_counts = [
+                                "dm2-Batch": "2",
+                                "dm2-BlazeRMA": "1",
+                                "dm2-FileProcessor": "1",
+                                "dm2-RestAPI": "2"
+                            ]
+                        } else if (ecs_cluster == "dm-tenant-admin-cluster") {
+                            desired_counts = [
+                                "dm-tenant-admin": "1",
+                                "dm2-tenant-admin": "1"
+                            ]
+                        } else if (ecs_cluster == "dm-ecs-cluster") {
+                            desired_counts = [
+                                "dm-Batch": "2",
+                                "dm-BlazeRMA": "1",
+                                "dm-FileProcessor": "1",
+                                "dm-RestAPI": "2"
+                            ]
+                        }
+                         else if (ecs_cluster == "dm-bpocloud-cluster") {
+                            desired_counts = [
+                                "bpocloud-blitzen": "1",
+                                "bpocloud-blitzen-db": "0",
+                                "bpocloud-comet": "1",
+                                "bpocloud-comet-db": "0",
+                                "bpocloud-cupid": "1",
+                                "bpocloud-cupid-db": "0",
+                                "bpocloud-dancer": "1",
+                                "bpocloud-dancer-db": "0",
+                                "dm-bpo-ui": "1"
+                            ]
+                        }            
+                        // Check the operation type (start or stop)
+                        def operationType = op_ecs
+                        echo "Operation Type: ${operationType}"
+    
+                        // Iterate over the services in the desired_counts map and update their desired count
+                        desired_counts.each { service, count ->
+                            // Determine the desired count based on operation type
+                            def desired_count = operationType == 'start' ? count : "0" // Use the desired count when starting, or set to zero when stopping
+    
+                            echo "Scaling service ${service} to desired count: ${desired_count}"
+    
+                            // Execute the scaling command
+                            def scale_service = sh (
+                                script: "aws ecs update-service --cluster $ecs_cluster --service $service --desired-count $desired_count",
+                                returnStdout: true
+                            ).trim()
+    
+                            echo "Scaled service $service in cluster $ecs_cluster to desired count $desired_count"
+                        }
+                    }
+                }
+              }
+            } 
+         }
+stage('start RDS and Scale ECS Services and eks nodegroup based on userchoice') {
+    steps {
+        script {
+            withAWS(region: CICD_REGION, roleAccount: CICD_ACCOUNT_ID, role: CICD_REGION_ROLE, duration: 3600) {
+                withAWS(region: AWS_DEPLOYMENT_REGION, roleAccount: AWS_ACCOUNT_ID, role: AWS_IAM_ROLE_NAME, duration: 3600) {
+                    if (dmuserchoice == 'none') {
+                        echo "operationType is 'none', skipping the scaling step."
+                        return
+                    }                    
+                    if (dmuserchoice1 == 'dm_in_performance_mode') {
+                        dmrds_cluster1 = "dm-rds-cluster-v2"
+                        dmecs_cluster = "dm-ecs-cluster"
+                        dmEC2_Instance = "dm-DebtManager-activemq-asg"
+                        dmdesired_counts_asg = [
+                            "dm-ec2-pgadmin" : [desired: 1, min: 1, max: 2],
+                            "dm-ec2-ecs": [desired: 4, min: 3, max: 5]
+                        ]
+                        dmdesired_counts_svc = [
+                            "dm-Batch": "2",
+                            "dm-BlazeRMA": "1",
+                            "dm-FileProcessor": "1",
+                            "dm-RestAPI": "2"
+                        ]
+                        dmeks_cluster = "dm-rule-server-rc1"
+                        dmeks_nodegroup = "rc1-smarts-nodegroup"
+                        dmselected_capacity = "6"
+                    } else if (dmuserchoice1 == 'dm_in_normal_mode') {
+                        dmrds_cluster1 = "dm-rds-cluster-v2"
+                        dmecs_cluster = "dm-ecs-cluster"
+                        dmEC2_Instance = "dm-DebtManager-activemq-asg"
+                        dmdesired_counts_asg = [
+                            "dm-ec2-pgadmin" : [desired: 1, min: 1, max: 2],
+                            "dm-ec2-ecs": [desired: 3, min: 2, max: 4]
+                        ]
+                        dmdesired_counts_svc = [
+                            "dm-Batch": "1",
+                            "dm-BlazeRMA": "1",
+                            "dm-FileProcessor": "1",
+                            "dm-RestAPI": "1"
+                        ]
+                        dmeks_cluster = "dm-rule-server-rc1"
+                        dmeks_nodegroup = "rc1-smarts-nodegroup"
+                        dmselected_capacity = "6"
+                    } else {
+                        echo "Invalid user choice. Exiting."
+                        return
+                    }
+
+                    def db_status = sh(
+                        script: "aws rds describe-db-clusters --db-cluster-identifier $dmrds_cluster1 --query DBClusters[0].Status --output text",
+                        returnStdout: true
+                    ).trim()
+
+                    switch (dmuserchoice) {
+                        case "start":
+                            if (db_status == "available") {
+                                echo "RDS cluster $dmrds_cluster1 is already available. No action needed."
+                            } else {
+                                echo "Starting RDS cluster as ECS service is set to start."
+                                sh(script: "aws rds start-db-cluster --db-cluster-identifier $dmrds_cluster1", returnStdout: true)
+                                echo "Waiting for RDS cluster to become available..."
+                                
+                                while (db_status != "available") {
+                                    sleep(60)
+                                    db_status = sh(
+                                        script: "aws rds describe-db-clusters --db-cluster-identifier $dmrds_cluster1 --query DBClusters[0].Status --output text",
+                                        returnStdout: true
+                                    ).trim()
+                                }
+                                echo "RDS cluster $dmrds_cluster1 is now available."
+                            }
+                            break
+
+                        case "stop":
+                            echo "No action needed for RDS cluster: $dmrds_cluster1."
+                            break
+                    }
+
+                    dmdesired_counts_asg.each { dmasg, count ->
+                        def dmdesired_cap_asg = count.desired
+                        def dmmin_cap_asg = count.min
+                        def dmmax_cap_asg = count.max
+
+                        def suspended_processes = sh(
+                            script: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $dmasg --query 'AutoScalingGroups[0].SuspendedProcesses[*].ProcessName' --output text",
+                            returnStdout: true
+                        ).trim()
+
+                        if (!suspended_processes.isEmpty()) {
+                            echo "Resuming suspended processes for ASG $dmasg."
+                            sh(script: "aws autoscaling resume-processes --auto-scaling-group-name $dmasg", returnStdout: true)
+                        }
+
+                        switch (dmuserchoice) {
+                            case "start":
+                                echo "Updating ASG $dmasg with Desired: $dmdesired_cap_asg, Min: $dmmin_cap_asg, Max: $dmmax_cap_asg."
+                                sh(script: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name $dmasg --desired-capacity $dmdesired_cap_asg --min-size $dmmin_cap_asg --max-size $dmmax_cap_asg", returnStdout: true)
+                                break
+
+                            case "stop":
+                                sh(script: "aws autoscaling update-auto-scaling-group --auto-scaling-group-name $dmasg --desired-capacity 0 --min-size 0 --max-size 0", returnStdout: true)
+                                break
+                        }
+                    }
+
+                    dmdesired_counts_svc.each { dmservice, count ->
+                        def dmdesired_count = dmuserchoice == 'start' ? count : "0"
+                        echo "Scaling service $dmservice in cluster $dmecs_cluster to $dmdesired_count."
+                        sh(script: "aws ecs update-service --cluster $dmecs_cluster --service $dmservice --desired-count $dmdesired_count", returnStdout: true)
+                    }
+                   //InstanceId = sh(script:'aws ec2 describe-instances --filters Name=tag:Name,Values=dm-DebtManager-activemq-asg --query "Reservations[*].Instances[*].InstanceId" --output text', returnStdout:true).trim()
+                   InstanceId = sh(script: "aws ec2 describe-instances --filters Name=tag:Name,Values=$dmEC2_Instance --query \"Reservations[*].Instances[*].InstanceId\" --output text", returnStdout:true).trim()
+                  def lines = InstanceId.readLines()
+                  echo "$dmEC2_Instance ID is $InstanceId"
+
+                  // get instance status
+                   //def instance_status = sh(script:'aws ec2 describe-instances --filters Name=tag:Name,Values=dm-DebtManager-activemq-asg "Name=instance-state-name,Values=running,stopped" | jq \'.Reservations[0].Instances[0].State.Name\' | tr -d \'"\'' , returnStdout:true).trim()
+                   def instance_status = sh(script: "aws ec2 describe-instances --filters Name=tag:Name,Values=$dmEC2_Instance Name=instance-state-name,Values=running,stopped | jq '.Reservations[0].Instances[0].State.Name' | tr -d '\"'", returnStdout:true).trim()   
+                     
+                  switch (dmuserchoice){
+                    case "start":
+                          if ("$instance_status"=="stopped"){
+                            start_instances = sh(script: "aws ec2 start-instances --instance-ids $InstanceId", returnStdout:true).trim()
+                            echo "Instance $InstanceId is now started"
+                          }
+                          else if ("$instance_status"=="running"){
+                              echo "Instance $InstanceId is already running"
+                          }
+                          else{
+                            echo "ERROR"
+                          }
+                    break;
+
+                    case "stop":
+                          if ("$instance_status"=="stopped"){
+                            echo "Instance $InstanceId is already in stop state"
+                          }
+                          else if ("$instance_status"=="running"){
+                            stop_instances = sh(script: "aws ec2 stop-instances --instance-ids $InstanceId", returnStdout:true).trim()
+                            echo "Stopped - $InstanceId"
+                          }
+                    break;
+                  }
+                  // EKS Scaling 
+                        def dmasg_name = sh(
+                            script: "aws eks describe-nodegroup --cluster-name $dmeks_cluster --nodegroup-name $dmeks_nodegroup --query 'nodegroup.resources.autoScalingGroups[0].name' --output text",
+                            returnStdout: true
+                        ).trim()
+
+                        if (dmasg_name == "ASG_NOT_FOUND") {
+                            echo "No asg associated with node group ${dmeks_nodegroup}. proceeding with desired capacity update on node group"
+                        } else {
+                        // Retrieve suspended processes for the ASG
+                        def suspended_processes = sh(
+                            script: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $dmasg_name --query 'AutoScalingGroups[0].SuspendedProcesses[*].ProcessName' --output text",
+                            returnStdout: true
+                        ).trim()
+
+                        if (!suspended_processes.isEmpty()) {
+                            echo "Suspended processes found for ASG ${dmasg_name}: ${suspended_processes}"
+                            sh(script: "aws autoscaling resume-processes --auto-scaling-group-name $dmasg_name", returnStdout: true)
+                            echo "Resumed suspended processes for ASG $dmasg_name"
+                            // Optionally, resume processes here if necessary
+                        } else {
+                            echo "No suspended processes found for ASG ${dmasg_name}"
+                        }
+                    }
+                        def dmmin_size = 0
+                        def dmmax_size = 0 
+                        def dmdesired_size = 0 
+                            // Use switch to determine scaling parameters based on operation type
+                            switch (dmuserchoice){ 
+                                case 'start':
+                                    dmmin_size = dmselected_capacity
+                                    dmmax_size = dmselected_capacity
+                                    dmdesired_size = dmselected_capacity
+                                    break
+                                case 'stop':
+                                    dmmin_size = "0" // Keep minSize as 1
+                                    dmmax_size = "1" // Limit maxSize to 1 
+                                    dmdesired_size = "0" // Set desiredSize to 0 to stop
+                                    break
+                                default:
+                                    error("Invalid operation type: ${operationType}")
+                            }
+    
+                            echo "Scaling node group ${dmeks_nodegroup} to desired capacity: ${dmdesired_size} with min size: ${dmmin_size} and max size: ${dmmax_size}"
+    
+                            // Execute the scaling command
+                            def scale_nodegroup = sh (
+                                script: "aws eks update-nodegroup-config --cluster-name $dmeks_cluster --nodegroup-name $dmeks_nodegroup --scaling-config minSize=$dmmin_size,maxSize=$dmmax_size,desiredSize=$dmdesired_size",
+                                returnStdout: true
+                            ).trim()
+    
+                            echo "Scaled node group $dmeks_nodegroup to desired capacity $dmdesired_size with min size $dmmin_size and max size $dmmax_size"
+                }
+            }
+        }
+    }
+}
+    stage('Scale EKS Node Group') {
+        steps {
+            script {
+                withAWS(region: CICD_REGION, roleAccount: CICD_ACCOUNT_ID, role: CICD_REGION_ROLE, duration: 3600) {
+                    withAWS(region: AWS_DEPLOYMENT_REGION, roleAccount: AWS_ACCOUNT_ID, role: AWS_IAM_ROLE_NAME, duration: 3600) {
+                        
+                        def desired_capacities = [
+                        "rc1-smarts-nodegroup": "6"
+                        ]
+    
+                        // Check the operation type (start or stop)
+                        def operationType = op_eks
+                        echo "Operation Type: ${operationType}"
+
+                        // Exit the stage early if operation type is none
+                        if (operationType == 'none') {
+                            echo "operationType is 'none', skipping the scaling step."
+                            return
+                        }
+    
+                        // Get the desired capacity for the selected node group
+                        def selected_capacity = desired_capacities[eks_nodegroup]
+    
+                        if (selected_capacity != null) {
+                            // Initialize scaling parameters
+                            def min_size, max_size, desired_size
+                        def asg_name = sh(
+                            script: "aws eks describe-nodegroup --cluster-name $eks_cluster --nodegroup-name $eks_nodegroup --query 'nodegroup.resources.autoScalingGroups[0].name' --output text",
+                            returnStdout: true
+                        ).trim()
+
+                        if (asg_name == "ASG_NOT_FOUND") {
+                            echo "No asg associated with node group ${eks_nodegroup}. proceeding with desired capacity update on node group"
+                        } else {
+                        // Retrieve suspended processes for the ASG
+                        def suspended_processes = sh(
+                            script: "aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names $asg_name --query 'AutoScalingGroups[0].SuspendedProcesses[*].ProcessName' --output text",
+                            returnStdout: true
+                        ).trim()
+
+                        if (!suspended_processes.isEmpty()) {
+                            echo "Suspended processes found for ASG ${asg_name}: ${suspended_processes}"
+                            sh(script: "aws autoscaling resume-processes --auto-scaling-group-name $asg_name", returnStdout: true)
+                            echo "Resumed suspended processes for ASG $asg_name"
+                            // Optionally, resume processes here if necessary
+                        } else {
+                            echo "No suspended processes found for ASG ${asg_name}"
+                        }
+                    }
+    
+                            // Use switch to determine scaling parameters based on operation type
+                            switch (operationType) {
+                                case 'start':
+                                    min_size = selected_capacity
+                                    max_size = selected_capacity
+                                    desired_size = selected_capacity
+                                    break
+                                case 'stop':
+                                    min_size = "0" // Keep minSize as 1
+                                    max_size = "1" // Limit maxSize to 1 
+                                    desired_size = "0" // Set desiredSize to 0 to stop
+                                    break
+                                default:
+                                    error("Invalid operation type: ${operationType}")
+                            }
+    
+                            echo "Scaling node group ${eks_nodegroup} to desired capacity: ${desired_size} with min size: ${min_size} and max size: ${max_size}"
+    
+                            // Execute the scaling command
+                            def scale_nodegroup = sh (
+                                script: "aws eks update-nodegroup-config --cluster-name $eks_cluster --nodegroup-name $eks_nodegroup --scaling-config minSize=$min_size,maxSize=$max_size,desiredSize=$desired_size",
+                                returnStdout: true
+                            ).trim()
+    
+                            echo "Scaled node group $eks_nodegroup to desired capacity $desired_size with min size $min_size and max size $max_size"
+                        } else {
+                            echo "Node group ${eks_nodegroup} not found"
+                        }
+                    }
+                }
+            }
+          }
+        }
+      }
+    }
