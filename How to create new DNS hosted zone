@@ -1,0 +1,21 @@
+ Create a public hosted zone in the AWS account where your target host or website is located. The hosted zone name should be your desired subdomain (e.g., comm.test.com).
+2.    Copy the NS (Name Server) records generated for this hosted zone to a notepad.
+3.    Switch to the AWS account where the testdev.com domain is managed (Account #123).
+4.    In this account, navigate to the Route 53 service and locate the testdev.com domain.
+5.    Within the testdev.com domain settings, click on "Create record".
+6.    For the new record:
+o    Choose "Record Type: Name Server Records (NS)"
+o    Set the record name to your subdomain (e.g., comm.testdev.com)
+7.    In the "Value" field, paste the NS records you copied in step 2.
+8.    Save the new record.
+9.    Wait a few minutes for the changes to propagate.
+10.    To verify the resolution:
+•    Return to the AWS account where you created the hosted zone (from step 1)
+•    Create a CNAME record in this hosted zone
+•    The CNAME record should be for a specific tenant, e.g., tenant1.comm.testdev.com
+•    Point the CNAME record to your desired resource (e.g., a load balancer)
+11.    After allowing some time for DNS propagation (typically 5-30 minutes):
+•    On your local computer, open Git Bash or Command Prompt
+•    Run the command: nslookup tenant1.comm.testdev.com
+(Replace 'tenant1.comm' with your actual tenant and subdomain)
+This process will delegate the DNS management of your subdomain to the public hosted zone in the other AWS account, allow you to create tenant-specific records, and verify that the setup is working correctly.
