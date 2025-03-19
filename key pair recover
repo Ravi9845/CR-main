@@ -1,0 +1,24 @@
+add in user data
+Content-Type: multipart/mixed; boundary="//"
+MIME-Version: 1.0
+
+--//
+Content-Type: text/cloud-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="cloud-config.txt"
+
+#cloud-config
+cloud_final_modules:
+- [users-groups, once]
+users:
+  - name: username(ec2-user or ubuntu)
+    ssh-authorized-keys:
+     - PublicKeypair
+	 
+https://repost.aws/knowledge-center/user-data-replace-key-pair-ec2
+================================================================================
+https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/create-key-pairs.html#how-to-generate-your-own-key-and-import-it-to-aws
+cover keypair to public
+	 Get public key from private key
+ssh-keygen -y -f testing.pem > testing.pub
