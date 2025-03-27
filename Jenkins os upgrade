@@ -1,0 +1,140 @@
+1. Create new  AMI  
+ 
+Create an Ec2 instance  
+• VPC-id , subnet id , security group options should be same that of previous instance. 
+• OS will be latest compatible version. 
+• Add snapshot of volume 
+• Rest configuration will be same  
+ 
+ 
+ 
+2. Install Jenkins and config new Ami 
+ 
+• Open in the instance in git bash 
+ssh -i "C:\crsoftware\access key\Ec2-CICDKey.pem" ec2-user@10.30.0.183 {Private ip of new instance} 
+Root user  -- >  sudo su  
+ 
+ 
+• Install jenkins in new instance and also install java  
+yum install java-11-openjdk 
+Yum intstall jenkins  
+sudo wget -O /etc/yum.repos.d/jenkins.repo  https://pkg.jenkins.io/redhat/jenkins.repo 
+sudo rpm --import  https://pkg.jenkins.io/redhat/jenkins.io-2023.key 
+ 
+ 
+• Basic jenkins commands 
+systemctl start jenkins 
+systemctl status jenkins 
+systemctl daemon-reload 
+systemctl restart jenkins 
+ 
+ 
+• Mount EFS to the new EC2 instance  
+	• Create backup of previous file 
+cp jenkins.service jenkins.service.bak 
+ 
+ 
+ 
+-add  below path in /etc/fstab for permanent mount
+ 
+fs-47af98f3.efs.us-east-1.amazonaws.com:/ /mnt/jenkins nfs4 defaults,_netdev 0 0 
+  
+cmefs.internal.crsdev.com:/ /ConfigurationManagement nfs4 defaults,_netdev 0 0 
+
+
+ 
+ 
+  cat  /usr/lib/systemd/system/jenkins.service 
+  vi   /usr/lib/systemd/system/jenkins.service 
+ 
+• Change the ENV. 
+ 
+# Directory where Jenkins stores its configuration and workspaces 
+Environment="JENKINS_HOME=/mnt/jenkins" 
+WorkingDirectory=/mnt/jenkins 
+ 
+ 
+ 
+ 
+• To admin login to new jenkins  http://10.30.0.183:8080  (Pvt IP)  
+ cat /var/lib/jenkins/secrets/initialAdminPassword 
+ 
+ 
+ 
+3. Modified autoscalling and config grp to use to new AMI  
+ 
+ 
+ 
+ 
+ 
+             chown -R jenkins:jenkins /mnt/jenkins 
+ 
+ 
+ 
+1. Mail all ML_DM_SDLC that Jenkins will off for 4hrs  
+ 
+ 
+ 
+steps  
+1. In the new amazonn 2023 linux instance we install jenkins and do the required configuration 
+2. create an AMI out of the amazon linux instance from the previous step   
+3. create a new launch template version and attached to jenkins auto-scaling group 
+4. shutdown the existing Redhat linux jenkins EC2 instance  
+5. auto-scaling group would launch a new EC2 instance from the new AMI 
+6. verify log-in to jenkins and ensure all configration and jobs are present. 
+Commands 
+ 
+Vi command 
+Esc +a -> cursor will act like same as notepad 
+Esc + :  
+:wq 	Save the file exit vi 
+:w! 	Force save the file 
+:q! 	Quit vi but don’t save changes 
+ 
+From < https://www.thegeekdiary.com/basic-vi-commands-cheat-sheet/>  
+ 
+ 
+ 
+ps -a | grep ssh-agent 
+ssh -i "C:\crsoftware\access key\Ec2-CICDKey.pem" ec2-user@10.30.0.183 
+ 
+ cat  /usr/lib/systemd/system/jenkins.service 
+ 
+ 
+# Directory where Jenkins stores its configuration and workspaces 
+Environment="JENKINS_HOME=/mnt/jenkins" 
+WorkingDirectory=/mnt/jenkins 
+ 
+cd  /usr/lib/systemd/system/ 
+ ls -l 
+#creating back-up file 
+cp jenkins.service jenkins.service.bak 
+ 
+[root@ip-10-30-0-213 system]# systemctl restart jenkins 
+[root@ip-10-30-0-213 system]# systemctl status jenkins 
+[root@ip-10-30-0-213 system]# systemctl daemon-reload 
+[root@ip-10-30-0-213 system]# systemctl restart jenkins 
+[root@ip-10-30-0-213 system]# cat /var/lib/jenkins/secrets/initialAdminPassword 
+ 
+ 
+password- 94feb9c5acc845a88200fa4cfc2223a3 
+ 
+ 
+wget -O /etc/yum.repos.d/jenkins.repo  https://pkg.jenkins.io/redhat/jenkins.repo 
+ 
+rpm --import  https://pkg.jenkins.io/redhat/jenkins.io-2023.key 
+ 
+ 
+fs-47af98f3.efs.us-east-1.amazonaws.com:/ /mnt/jenkins nfs4 defaults,_netdev 0 0 
+  
+cmefs.internal.crsdev.com:/ /ConfigurationManagement nfs4 defaults,_netdev 0 0 
+ 
+cat /etc/sysconfig/jenkins 
+ 
+cat /var/lib/jenkins 
+ 
+ systemctl start jenkins 
+ 
+ systemctl status jenkins 
+
+From <https://usc-onenote.officeapps.live.com/o/onenoteframe.aspx?edit=0&ui=en-US&rs=en-US&wopisrc=https%3A%2F%2Fcandrsoftware-my.sharepoint.com%2Fpersonal%2Fhimanshuhiware_crsoftware_com%2F_vti_bin%2Fwopi.ashx%2Ffolders%2F6658fdc064c241d394cee15a5edc12c9&wdorigin=Sharepoint&wdenableroaming=1&mscc=1&wdodb=1&hid=D95B6EA1-10B0-7000-66A9-96EAA7F2CC4F.0&uih=sharepointcom&wdlcid=en-US&dchat=1&sc=%7B%22pmo%22%3A%22https%3A%2F%2Fcandrsoftware-my.sharepoint.com%22%2C%22pmshare%22%3Atrue%7D&wdhostclicktime=1734421299027&jsapi=1&jsapiver=v1&newsession=1&corrid=8df2fcba-b385-77b2-4093-92d076ece393&usid=8df2fcba-b385-77b2-4093-92d076ece393&sftc=1&sams=1&cac=1&mtf=1&sfp=1&hch=1&hwfh=1&readonly=1&uihit=docaspx&muv=1&wdredirectionreason=Force_SingleStepBoot&rct=Normal&ctp=LeastProtected> 
