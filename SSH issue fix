@@ -1,0 +1,2 @@
+	1. Create new server and detach the volume from old server and attached to the new server
+   2. Edit /etc/selinux/config file and set SELINUX to disabled and enable networkmanager (systemctl status networkmanager)
