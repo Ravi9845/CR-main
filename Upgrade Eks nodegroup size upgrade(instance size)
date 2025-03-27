@@ -1,0 +1,19 @@
+1 start eks cluster = take backup od primary, push to s3 = done
+2 take backup of deployment artifact  = done
+3 cretae new launch temp with r5.xllarge and ec2 cicd key 
+4 instance refresh = done
+5 automation based deployment of eks ns
+6 value should be taken from ss
+7 import the repo and validate setup
+8 okta login 
+9 validate pr and gr metrics
+
+service/prometheus-operated  
+
+
+kubectl exec pod/smarts-rc1-primary-replica-replica-0 -n smarts-rc1 -- sladmin repository --export --exportSummary
+
+
+kubectl cp smarts-rc1-primary-replica-smarts-primary-0:Export.2025.03.17.zip /root/smarts-export/smarts-rc1-primary-replica-smarts-primary-0 -Export.2025.03.17.zip -n smarts-rc1
+
+aws s3 cp /root/smarts-export/smarts-rc1-primary-replica-smarts-primary-0-Export.2025.03.17.zip s3://smarts-rc1-util/Backups/Workspaces/
