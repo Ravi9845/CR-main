@@ -1,0 +1,25 @@
+1. JAVA
+
+yum search java | grep openjdk
+yum list available | grep java-1.8.0
+sudo yum install -y java-1.8.0-openjdk-devel
+java -version
+
+2. Apache setup(https://www.baeldung.com/linux/apache-server-set-up)
+yum install -y gcc.x86_64 gcc-c++.x86_64 glibc-devel.x86_64 perl bzip2 expat-devel.x86_64 pcre{,-devel}.x86_64 apr{,-devel,-util,-util-devel}.x86_64
+cd /apps/
+mkdir Apache & cd Apache
+mkdir 
+wget https://dlcdn.apache.org/httpd/httpd-2.4.62.tar.gz
+tar -xvzf httpd-2.4.62.tar.gz
+./configure --prefix=/apps/Apache
+make
+make install
+
+======================================================
+Jboss installation(chapter 7)
+a. install jar file from https://developers.redhat.com/products/eap/download link
+cd $JBOSS_HOME
+b. Run java -jar jboss-eap-7.4.0-installer.jar command.
+c. to update version 
+  I. download patch file from https://access.redhat.com/jbossnetwork/restricted/softwareDetail.html?softwareId=107397 lin and go to directory where jboss ha installed (./standalone.sh --version) and run bin/jboss-cli.sh "patch apply path/to/jboss-eap-7.4.20-patch.zip command
