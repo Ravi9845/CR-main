@@ -1,0 +1,31 @@
+1. Upgrade the EKS cluster to the required version
+
+2. Create AMI for EKS node group:
+ A. Search for the AMI that has the required EKS version
+
+ B. Use the identified AMI as a base image
+
+ C. Navigate to EC2 Image Builder service in AWS Console
+
+ D. In Image Builder:
+  Click on "Image pipelines"
+  Search for "eks-node"
+  Select the latest output image version
+  Click on "Image Recipe"
+  Create a new recipe and Use the AMI ID obtained from Step A as the base image
+
+ E. Select the latest output image version
+
+ F. In Actions menu:
+   Click "Edit pipeline" and Replace with the new recipe created in step D
+
+G. Run the pipeline to generate the new custom AMI
+
+3. Create a new launch template using the custom AMI generated in step 3.2G
+4. Update the node group configuration in EKS to use the new launch template
+=======================================================================================
+only 2 version Gap should be there
+
+kubectl cordon ip-10-100-19-126.ec2.internal ip-10-100-19-147.ec2.internal ip-10-100-19-178.ec2.internal ip-10-100-19-212.ec2.internal ip-10-100-19-253.ec2.internal ip-10-100-19-31.ec2.internal
+kubectl get nodes
+kubectl drain <old-node-1> --ignore-daemonsets
