@@ -1,0 +1,8 @@
+1 HPA will increse pods based on request sizeHPA does not scale based on the total CPU the pod can use. Instead, it scales based on how much CPU is being used compared to what was requested in the pod spec.
+Example:
+Scenario 1: Requested CPU = 0.5, Limit CPU = 1
+Your pod requests 0.5 CPU (500mC) but has a limit of 1 CPU.
+If the pod uses 0.5 CPU, HPA sees this as 100% usage (because it’s fully using the requested amount).
+If the pod uses 0.25 CPU, HPA sees this as 50% usage.
+HPA scales up only when CPU exceeds the target percentage of the requested value (e.g., if the target is 80% and CPU usage is above 0.4 CPU (80% of 0.5), it will scale up
+==============================================================================================================================
