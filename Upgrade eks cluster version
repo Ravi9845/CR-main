@@ -1,5 +1,14 @@
 1. Upgrade the EKS cluster to the required version
 
+get a AMI
+
+aws ssm get-parameter \
+    --name /aws/service/eks/optimized-ami/1.29/amazon-linux-2/recommended/image_id \
+    --region us-east-1 \
+    --query "Parameter.Value" \
+    --output text
+
+
 2. Create AMI for EKS node group:
  A. Search for the AMI that has the required EKS version
 
