@@ -1,0 +1,13 @@
+https://www.stacksimplify.com/aws-eks/aws-eks-monitoring/learn-to-enable-monitoring-for-kubernetes-workloads-on-aws-eks/ (doc)
+steps 
+1. attach policy to eks nodegroup Go to Services -> EC2 -> Worker Node EC2 Instance -> IAM Role -> Click on that role
+# Policy to be associated
+Associate Policy: CloudWatchAgentServerPolicy
+
+======================================
+2. execute following commands.
+# Replaced Cluster Name and Region
+curl -s https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/quickstart/cwagent-fluentd-quickstart.yaml | sed "s/{{cluster_name}}/eksdemo1/;s/{{region_name}}/us-east-1/" | kubectl apply -f -
+==============================================
+# List Daemonsets
+kubectl -n amazon-cloudwatch get daemonsets
